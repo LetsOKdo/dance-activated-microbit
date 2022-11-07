@@ -4,7 +4,7 @@ A demo application that makes your micro:bit V2 model respond to TikTok dance mo
 
 ![Dance activated micro:bit](assets/video-front-v2.jpg)
 
-Detailed instructions for the project are available on the [OKdo Project Hub](TBA)
+Detailed instructions for the project are available on the [OKdo Project Hub](https://www.okdo.com/project/machine-learning-dance-move-detector/)
 
 1. Clone this repository:
 
