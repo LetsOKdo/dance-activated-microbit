@@ -6,15 +6,43 @@ A demo application that makes your micro:bit V2 model respond to TikTok dance mo
 
 Detailed instructions for the project are available on the [OKdo Project Hub](TBA)
 
-## How to build
-
-1. Install [CMake](https://cmake.org), [Python 2.7](https://www.python.org) and the [GNU ARM Embedded Toolchain](https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-rm) and [Ninja](https://ninja-build.org). Make sure `arm-none-eabi-gcc` and the other components are in your PATH.
-
 1. Clone this repository:
 
     ```
     $ git clone https://github.com/LetsOKdo/dance-activated-microbit
     ```
+1. Change to project directory:
+
+    ```
+    $ cd dance-activated-microbit
+    ```
+
+## Build using Docker (tested on GNU/Linux Debian 11)
+1. Install Docker for your host [Get Docker](https://docs.docker.com/get-docker)
+
+1. Build the container:
+
+    ```
+    $ docker build -t microbit_dance_detector .
+    ```
+
+1. Build the project:
+
+    **macOS, Linux**
+
+    ```
+    $ docker run --rm -v $PWD:/data microbit_dance_detector
+    ```
+
+    **Windows**
+
+    ```
+    $ docker run --rm -v "%cd%":/data microbit_dance_detector
+    ```
+
+## Build natively (tested on GNU/Linux Debian 10 with gcc-arm-none-eabi-9-2020-q2-update)
+
+1. Install [CMake](https://cmake.org), [Python 2.7](https://www.python.org) and the [GNU ARM Embedded Toolchain](https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-rm) and [Ninja](https://ninja-build.org). Make sure `arm-none-eabi-gcc` and the other components are in your PATH.
 
 1. Build the project:
 
@@ -22,7 +50,21 @@ Detailed instructions for the project are available on the [OKdo Project Hub](TB
     $ python build.py
     ```
 
-1. Flash the binary to your micro:bit, by dragging `MICROBIT.hex` onto the `MICROBIT` disk drive.
+## Flash the image:
+
+1. Plug in your micro:bit to the host with a micro USB cable (the microbit should be visble as a mass storage device in your filemanager)
+
+1. Flash the binary to your micro:bit by dragging `MICROBIT.hex` onto the `MICROBIT` disk drive or copy the one from this repo.
+
+## Dance
+
+1. Detach your micro:bit and connect it to the battery pack
+
+1. The center LED on the matrix will light up showing that the micro:bit is ready to detect your dance moves
+
+1. Start dancing the "Floss dance" and if you do it right the matrix will light up with a smiley face
+
+1. The detection will reset automatically after a few seconds
 
 ## How to recognise new dances
 
