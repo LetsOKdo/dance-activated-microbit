@@ -2,8 +2,9 @@
 
 A demo application that makes your micro:bit V2 model respond to TikTok dance moves, built with Edge Impulse. This demo uses Machine Learning to analyse the accelerometer data coming from the micro:bit on-board sensor, showing a smiley on the display when it recognises "Floss" TikTok moves.
 
-![Dance activated micro:bit](assets/video-front-v2.jpg)
+[![Dance activated micro:bit](assets/video-front-v2.jpg)](https://www.okdo.com/project/machine-learning-dance-move-detector/)
 
+## Project
 Detailed instructions for the project are available on the [OKdo Project Hub](https://www.okdo.com/project/machine-learning-dance-move-detector/)
 
 1. Clone this repository:
