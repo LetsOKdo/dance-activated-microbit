@@ -10,12 +10,12 @@ Detailed instructions for the project are available on the [OKdo Project Hub](ht
 1. Clone this repository:
 
     ```
-    $ git clone https://github.com/LetsOKdo/dance-activated-microbit
+    git clone https://github.com/LetsOKdo/dance-activated-microbit
     ```
 1. Change to project directory:
 
     ```
-    $ cd dance-activated-microbit
+    cd dance-activated-microbit
     ```
 
 ## Build using Docker (tested on GNU/Linux Debian 11)
@@ -24,7 +24,7 @@ Detailed instructions for the project are available on the [OKdo Project Hub](ht
 1. Build the container:
 
     ```
-    $ docker build -t microbit_dance_detector .
+    docker build -t microbit_dance_detector .
     ```
 
 1. Build the project:
@@ -32,13 +32,13 @@ Detailed instructions for the project are available on the [OKdo Project Hub](ht
     **macOS, Linux**
 
     ```
-    $ docker run --rm -v $PWD:/data microbit_dance_detector
+    docker run --rm -v $PWD:/data microbit_dance_detector
     ```
 
     **Windows**
 
     ```
-    $ docker run --rm -v "%cd%":/data microbit_dance_detector
+    docker run --rm -v "%cd%":/data microbit_dance_detector
     ```
 
 ## Build natively (tested on GNU/Linux Debian 10 with gcc-arm-none-eabi-9-2020-q2-update)
@@ -48,7 +48,7 @@ Detailed instructions for the project are available on the [OKdo Project Hub](ht
 1. Build the project:
 
     ```
-    $ python build.py
+    python build.py
     ```
 
 ## Flash the image:
@@ -75,7 +75,7 @@ You can build new models using [Edge Impulse](https://docs.edgeimpulse.com/docs)
 1. Install Edge Impulse tools from the command window
 
   ```
-  $ npm install -g edge-impulse-cli
+  npm install -g edge-impulse-cli
   ```
 1. Set up one micro:bit as a [dance move transmitter](https://github.com/LetsOKdo/microbit-dancemove-transmitter)
 1. Set up another micro:bit as a [dance move receiver](https://github.com/LetsOKdo/microbit-dancemove-receiver)
