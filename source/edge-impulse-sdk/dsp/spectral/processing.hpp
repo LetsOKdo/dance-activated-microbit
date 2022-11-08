@@ -1,29 +1,24 @@
-/* Edge Impulse inferencing library
- * Copyright (c) 2020 EdgeImpulse Inc.
+/*
+ * Copyright (c) 2022 EdgeImpulse Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an "AS
+ * IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied. See the License for the specific language
+ * governing permissions and limitations under the License.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _EIDSP_SPECTRAL_PROCESSING_H_
 #define _EIDSP_SPECTRAL_PROCESSING_H_
 
-#include <vector>
+#include "edge-impulse-sdk/dsp/ei_vector.h"
 #include <algorithm>
 #include "../numpy.hpp"
 #include "filters.hpp"
@@ -75,6 +70,11 @@ namespace processing {
         float freq;
         float amplitude;
     } freq_peak_t;
+
+    typedef struct {
+        EIDSP_i32 freq;
+        EIDSP_i32 amplitude;
+    } freq_peak_i32_t;
 
     /**
      * Scale a the signal. This modifies the signal in place!
@@ -199,6 +199,7 @@ namespace processing {
             if (in[ix] > prev && in[ix] > in[ix+1]) {
                 // then make sure the threshold is met (on both?)
                 float height = (in[ix] - prev) + (in[ix] - in[ix + 1]);
+                // printf("%d inx: %f height: %f threshold: %f\r\n", ix, in[ix], height, threshold);
                 if (height > threshold) {
                     out[out_ix] = ix;
                     out_ix++;
@@ -237,6 +238,10 @@ namespace processing {
             EIDSP_ERR(EIDSP_MATRIX_SIZE_MISMATCH);
         }
 
+        if (output_matrix->rows == 0) {
+            return EIDSP_OK;
+        }
+
         int ret;
 
         int N = static_cast<int>(fft_length);
@@ -257,12 +262,13 @@ namespace processing {
         }
 
         // turn this into C++ vector and sort it based on amplitude
-        std::vector<freq_peak_t> peaks;
+        ei_vector<freq_peak_t> peaks;
         for (uint8_t ix = 0; ix < peak_count; ix++) {
             freq_peak_t d;
 
             d.freq = freq_space.buffer[static_cast<uint32_t>(peaks_matrix.buffer[ix])];
             d.amplitude = fft_matrix->buffer[static_cast<uint32_t>(peaks_matrix.buffer[ix])];
+            // printf("freq %f : %f amp: %f\r\n", peaks_matrix.buffer[ix], d.freq, d.amplitude);
             if (d.amplitude < threshold) {
                 d.freq = 0.0f;
                 d.amplitude = 0.0f;
@@ -291,6 +297,7 @@ namespace processing {
 
         return EIDSP_OK;
     }
+
 
     /**
      * Calculate spectral power edges in a singal
@@ -354,6 +361,7 @@ namespace processing {
 
         return EIDSP_OK;
     }
+
 
     /**
      * Estimate power spectral density using a periodogram using Welch's method.
@@ -455,7 +463,6 @@ namespace processing {
 
         return EIDSP_OK;
     }
-
 } // namespace processing
 } // namespace spectral
 } // namespace ei

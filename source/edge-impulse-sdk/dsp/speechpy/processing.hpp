@@ -1,23 +1,18 @@
-/* Edge Impulse inferencing library
- * Copyright (c) 2020 EdgeImpulse Inc.
+/*
+ * Copyright (c) 2022 EdgeImpulse Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an "AS
+ * IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied. See the License for the specific language
+ * governing permissions and limitations under the License.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _EIDSP_SPEECHPY_PROCESSING_H_
@@ -31,15 +26,8 @@ namespace speechpy {
 // one stack frame returned by stack_frames
 typedef struct ei_stack_frames_info {
     signal_t *signal;
-    std::vector<uint32_t> *frame_ixs;
+    std::vector<uint32_t> frame_ixs;
     int frame_length;
-
-    // start_ixs is owned by us
-    ~ei_stack_frames_info() {
-        if (frame_ixs) {
-            delete frame_ixs;
-        }
-    }
 } stack_frames_info_t;
 
 namespace processing {
@@ -51,8 +39,8 @@ namespace processing {
      */
     class preemphasis {
 public:
-        preemphasis(ei_signal_t *signal, int shift = 1, float cof = 0.98f)
-            : _signal(signal), _shift(shift), _cof(cof)
+        preemphasis(ei_signal_t *signal, int shift, float cof, bool rescale)
+            : _signal(signal), _shift(shift), _cof(cof), _rescale(rescale)
         {
             _prev_buffer = (float*)ei_dsp_calloc(shift * sizeof(float), 1);
             _end_of_signal_buffer = (float*)ei_dsp_calloc(shift * sizeof(float), 1);
@@ -96,6 +84,9 @@ public:
                 EIDSP_ERR(ret);
             }
 
+            // it might be that everything is already normalized here...
+            bool all_between_min_1_and_1 = true;
+
             // now we have the signal and we can preemphasize
             for (size_t ix = 0; ix < length; ix++) {
                 float now = out_buffer[ix];
@@ -109,12 +100,29 @@ public:
                     out_buffer[ix] = now - (_cof * _prev_buffer[0]);
                 }
 
+                if (_rescale && all_between_min_1_and_1) {
+                    if (out_buffer[ix] < -1.0f || out_buffer[ix] > 1.0f) {
+                        all_between_min_1_and_1 = false;
+                    }
+                }
+
                 // roll through and overwrite last element
-                numpy::roll(_prev_buffer, _shift, -1);
+                if (_shift != 1) {
+                    numpy::roll(_prev_buffer, _shift, -1);
+                }
                 _prev_buffer[_shift - 1] = now;
             }
 
             _next_offset_should_be += length;
+
+            // rescale from [-1 .. 1] ?
+            if (_rescale && !all_between_min_1_and_1) {
+                matrix_t scale_matrix(length, 1, out_buffer);
+                ret = numpy::scale(&scale_matrix, 1.0f / 32768.0f);
+                if (ret != 0) {
+                    EIDSP_ERR(ret);
+                }
+            }
 
             return EIDSP_OK;
         }
@@ -135,6 +143,7 @@ private:
         float *_prev_buffer;
         float *_end_of_signal_buffer;
         size_t _next_offset_should_be;
+        bool _rescale;
     };
 }
 
@@ -181,6 +190,72 @@ namespace processing {
     }
 
     /**
+     * frame_length is a float and can thus be off by a little bit, e.g.
+     * frame_length = 0.018f actually can yield 0.018000011f
+     * thus screwing up our frame calculations here...
+     */
+    static float ceil_unless_very_close_to_floor(float v) {
+        if (v > floor(v) && v - floor(v) < 0.001f) {
+            v = (floor(v));
+        }
+        else {
+            v = (ceil(v));
+        }
+        return v;
+    }
+
+    /**
+     * Calculate the length of a signal that will be sused for the settings provided.
+     * @param signal_size: The number of frames in the signal
+     * @param sampling_frequency (int): The sampling frequency of the signal.
+     * @param frame_length (float): The length of the frame in second.
+     * @param frame_stride (float): The stride between frames.
+     * @returns Number of frames required, or a negative number if an error occured
+     */
+    static int calculate_signal_used(
+        size_t signal_size,
+        uint32_t sampling_frequency,
+        float frame_length,
+        float frame_stride,
+        bool zero_padding,
+        uint16_t version)
+    {
+        int frame_sample_length;
+        int length;
+        if (version == 1) {
+            frame_sample_length = static_cast<int>(round(static_cast<float>(sampling_frequency) * frame_length));
+            frame_stride = round(static_cast<float>(sampling_frequency) * frame_stride);
+            length = frame_sample_length;
+        }
+        else {
+            frame_sample_length = static_cast<int>(ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_length));
+            float frame_stride_arg = frame_stride;
+            frame_stride = ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_stride_arg);
+            length = (frame_sample_length - (int)frame_stride);
+        }
+
+        volatile int numframes;
+        volatile int len_sig;
+
+        if (zero_padding) {
+            // Calculation of number of frames
+            numframes = static_cast<int>(
+                ceil(static_cast<float>(signal_size - length) / frame_stride));
+
+            // Zero padding
+            len_sig = static_cast<int>(static_cast<float>(numframes) * frame_stride) + frame_sample_length;
+        }
+        else {
+            numframes = static_cast<int>(
+                floor(static_cast<float>(signal_size - length) / frame_stride));
+            len_sig = static_cast<int>(
+                (static_cast<float>(numframes - 1) * frame_stride + frame_sample_length));
+        }
+
+        return len_sig;
+    }
+
+    /**
      * Frame a signal into overlapping frames.
      * @param info This is both the base object and where we'll store our results.
      * @param sampling_frequency (int): The sampling frequency of the signal.
@@ -192,18 +267,30 @@ namespace processing {
      * @returns EIDSP_OK if OK
      */
     static int stack_frames(stack_frames_info_t *info,
-                            uint32_t sampling_frequency,
+                            float sampling_frequency,
                             float frame_length,
                             float frame_stride,
-                            bool zero_padding)
+                            bool zero_padding,
+                            uint16_t version)
     {
         if (!info->signal || !info->signal->get_data || info->signal->total_length == 0) {
             EIDSP_ERR(EIDSP_SIGNAL_SIZE_MISMATCH);
         }
 
         size_t length_signal = info->signal->total_length;
-        int frame_sample_length = static_cast<int>(round(static_cast<float>(sampling_frequency) * frame_length));
-        frame_stride = round(static_cast<float>(sampling_frequency) * frame_stride);
+        int frame_sample_length;
+        int length;
+        if (version == 1) {
+            frame_sample_length = static_cast<int>(round(static_cast<float>(sampling_frequency) * frame_length));
+            frame_stride = round(static_cast<float>(sampling_frequency) * frame_stride);
+            length = frame_sample_length;
+        }
+        else {
+            frame_sample_length = static_cast<int>(ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_length));
+            float frame_stride_arg = frame_stride;
+            frame_stride = ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_stride_arg);
+            length = (frame_sample_length - (int)frame_stride);
+        }
 
         volatile int numframes;
         volatile int len_sig;
@@ -211,7 +298,7 @@ namespace processing {
         if (zero_padding) {
             // Calculation of number of frames
             numframes = static_cast<int>(
-                ceil(static_cast<float>(length_signal - frame_sample_length) / frame_stride));
+                ceil(static_cast<float>(length_signal - length) / frame_stride));
 
             // Zero padding
             len_sig = static_cast<int>(static_cast<float>(numframes) * frame_stride) + frame_sample_length;
@@ -220,25 +307,23 @@ namespace processing {
         }
         else {
             numframes = static_cast<int>(
-                floor(static_cast<float>(length_signal - frame_sample_length) / frame_stride));
+                floor(static_cast<float>(length_signal - length) / frame_stride));
             len_sig = static_cast<int>(
                 (static_cast<float>(numframes - 1) * frame_stride + frame_sample_length));
 
             info->signal->total_length = static_cast<size_t>(len_sig);
         }
 
-        // alloc the vector on the heap, will be owned by the info struct
-        std::vector<uint32_t> *frame_indices = new std::vector<uint32_t>();
-
+        info->frame_ixs.clear();
+        
         int frame_count = 0;
 
         for (size_t ix = 0; ix < static_cast<uint32_t>(len_sig); ix += static_cast<size_t>(frame_stride)) {
             if (++frame_count > numframes) break;
 
-            frame_indices->push_back(ix);
+            info->frame_ixs.push_back(ix);
         }
 
-        info->frame_ixs = frame_indices;
         info->frame_length = frame_sample_length;
 
         return EIDSP_OK;
@@ -262,53 +347,36 @@ namespace processing {
         uint32_t sampling_frequency,
         float frame_length,
         float frame_stride,
-        bool zero_padding)
+        bool zero_padding,
+        uint16_t version)
     {
-        size_t length_signal = signal_size;
-        int frame_sample_length = static_cast<int>(round(static_cast<float>(sampling_frequency) * frame_length));
-        frame_stride = round(static_cast<float>(sampling_frequency) * frame_stride);
+        int frame_sample_length;
+        int length;
+        if (version == 1) {
+            frame_sample_length = static_cast<int>(round(static_cast<float>(sampling_frequency) * frame_length));
+            frame_stride = round(static_cast<float>(sampling_frequency) * frame_stride);
+            length = frame_sample_length;
+        }
+        else {
+            frame_sample_length = static_cast<int>(ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_length));
+            float frame_stride_arg = frame_stride;
+            frame_stride = ceil_unless_very_close_to_floor(static_cast<float>(sampling_frequency) * frame_stride_arg);
+            length = (frame_sample_length - (int)frame_stride);
+        }
 
-        int numframes;
+        volatile int numframes;
 
         if (zero_padding) {
             // Calculation of number of frames
             numframes = static_cast<int>(
-                ceil(static_cast<float>(length_signal - frame_sample_length) / frame_stride));
+                ceil(static_cast<float>(signal_size - length) / frame_stride));
         }
         else {
             numframes = static_cast<int>(
-                floor(static_cast<float>(length_signal - frame_sample_length) / frame_stride));
+                floor(static_cast<float>(signal_size - length) / frame_stride));
         }
 
         return numframes;
-    }
-
-    /**
-     * Power spectrum of a frame
-     * @param frame Row of a frame
-     * @param frame_size Size of the frame
-     * @param out_buffer Out buffer, size should be fft_points
-     * @param out_buffer_size Buffer size
-     * @param fft_points (int): The length of FFT. If fft_length is greater than frame_len, the frames will be zero-padded.
-     * @returns EIDSP_OK if OK
-     */
-    static int power_spectrum(float *frame, size_t frame_size, float *out_buffer, size_t out_buffer_size, uint16_t fft_points)
-    {
-        if (out_buffer_size != static_cast<size_t>(fft_points / 2 + 1)) {
-            EIDSP_ERR(EIDSP_MATRIX_SIZE_MISMATCH);
-        }
-
-        int r = numpy::rfft(frame, frame_size, out_buffer, out_buffer_size, fft_points);
-        if (r != EIDSP_OK) {
-            return r;
-        }
-
-        for (size_t ix = 0; ix < out_buffer_size; ix++) {
-            out_buffer[ix] = (1.0 / static_cast<float>(fft_points)) *
-                (out_buffer[ix] * out_buffer[ix]);
-        }
-
-        return EIDSP_OK;
     }
 
     /**
@@ -327,6 +395,10 @@ namespace processing {
     static int cmvnw(matrix_t *features_matrix, uint16_t win_size = 301, bool variance_normalization = false,
         bool scale = false)
     {
+        if (win_size == 0) {
+            return EIDSP_OK;
+        }
+
         uint16_t pad_size = (win_size - 1) / 2;
 
         int ret;
@@ -365,6 +437,25 @@ namespace processing {
                 EIDSP_ERR(ret);
             }
 
+            // subtract the mean for the features
+            for (size_t fm_col = 0; fm_col < features_matrix->cols; fm_col++) {
+                features_matrix->buffer[(ix * features_matrix->cols) + fm_col] =
+                    features_matrix->buffer[(ix * features_matrix->cols) + fm_col] - mean_matrix.buffer[fm_col];
+            }
+        }
+
+        ret = numpy::pad_1d_symmetric(features_matrix, &vec_pad, pad_size, pad_size);
+        if (ret != EIDSP_OK) {
+            EIDSP_ERR(ret);
+        }
+
+        for (size_t ix = 0; ix < features_matrix->rows; ix++) {
+            // create a slice on the vec_pad
+            EI_DSP_MATRIX_B(window, win_size, vec_pad.cols, vec_pad.buffer + (ix * vec_pad.cols));
+            if (!window.buffer) {
+                EIDSP_ERR(EIDSP_OUT_OF_MEM);
+            }
+
             if (variance_normalization == true) {
                 ret = numpy::std_axis0(&window, &window_variance);
                 if (ret != EIDSP_OK) {
@@ -373,15 +464,8 @@ namespace processing {
 
                 features_buffer_ptr = &features_matrix->buffer[ix * vec_pad.cols];
                 for (size_t col = 0; col < vec_pad.cols; col++) {
-                    *(features_buffer_ptr) = (*(features_buffer_ptr)-mean_matrix.buffer[col]) /
-                                             (window_variance.buffer[col] + FLT_EPSILON);
-                    features_buffer_ptr++;
-                }
-            }
-            else {
-                features_buffer_ptr = &features_matrix->buffer[ix * vec_pad.cols];
-                for (size_t col = 0; col < vec_pad.cols; col++) {
-                    *(features_buffer_ptr) = *(features_buffer_ptr)-mean_matrix.buffer[col];
+                    *(features_buffer_ptr) = (*(features_buffer_ptr)) /
+                                             (window_variance.buffer[col] + 1e-10);
                     features_buffer_ptr++;
                 }
             }
@@ -392,6 +476,60 @@ namespace processing {
             if (ret != EIDSP_OK) {
                 EIDSP_ERR(ret);
             }
+        }
+
+        return EIDSP_OK;
+    }
+
+    /**
+     * Perform normalization for MFE frames, this converts the signal to dB,
+     * then add a hard filter, and quantize / dequantize the output
+     * @param features_matrix input feature matrix, will be modified in place
+     */
+    static int mfe_normalization(matrix_t *features_matrix, int noise_floor_db) {
+        const float noise = static_cast<float>(noise_floor_db * -1);
+        const float noise_scale = 1.0f / (static_cast<float>(noise_floor_db * -1) + 12.0f);
+
+        for (size_t ix = 0; ix < features_matrix->rows * features_matrix->cols; ix++) {
+            float f = features_matrix->buffer[ix];
+            if (f < 1e-30) {
+                f = 1e-30;
+            }
+            f = numpy::log10(f);
+            f *= 10.0f; // scale by 10
+            f += noise;
+            f *= noise_scale;
+            // clip again
+            if (f < 0.0f) f = 0.0f;
+            else if (f > 1.0f) f = 1.0f;
+            features_matrix->buffer[ix] = f;
+        }
+
+        return EIDSP_OK;
+    }
+
+    /**
+     * Perform normalization for spectrogram frames, this converts the signal to dB,
+     * then add a hard filter
+     * @param features_matrix input feature matrix, will be modified in place
+     */
+    static int spectrogram_normalization(matrix_t *features_matrix, int noise_floor_db) {
+        const float noise = static_cast<float>(noise_floor_db * -1);
+        const float noise_scale = 1.0f / (static_cast<float>(noise_floor_db * -1) + 12.0f);
+
+        for (size_t ix = 0; ix < features_matrix->rows * features_matrix->cols; ix++) {
+            float f = features_matrix->buffer[ix];
+            if (f < 1e-30) {
+                f = 1e-30;
+            }
+            f = numpy::log10(f);
+            f *= 10.0f; // scale by 10
+            f += noise;
+            f *= noise_scale;
+            // clip again
+            if (f < 0.0f) f = 0.0f;
+            else if (f > 1.0f) f = 1.0f;
+            features_matrix->buffer[ix] = f;
         }
 
         return EIDSP_OK;
